@@ -18,68 +18,92 @@ from environment import TicTacToeEnv
 from agent import QLearningAgent
 
 
-def run_episode(env: TicTacToeEnv, agent_o: QLearningAgent, agent_x: QLearningAgent):
+def run_episode(
+    env: TicTacToeEnv,
+    agent_o: QLearningAgent,
+    agent_x: QLearningAgent,
+    first_player: int = 1,
+):
     """
     게임 한 판(에피소드)을 진행하고 양쪽 에이전트를 모두 학습시킵니다.
 
-    한 에피소드 흐름:
-        1. 보드 초기화
-        2. 종료될 때까지 O → X → O → X … 순서로 번갈아 행동
-        3. 각 행동마다 해당 에이전트의 Q-테이블 업데이트
-        4. 게임 종료 시 최종 보상으로 마지막 Q-값 재업데이트
+    핵심 설계 원칙 — "2수 후 상태"로 Q-업데이트:
+        Q-러닝 수식:  Q(s, a) ← r + γ · max Q(s', a')
+        2인 게임에서 s'는 "내가 다음 번에 실제로 마주할 상태"여야 합니다.
+        즉 상대가 응답한 뒤의 상태 = 내 차례가 다시 돌아왔을 때의 state.
+
+        ❌ 잘못된 방식: next_state (내가 방금 둔 직후, 상대 미응답)
+        ✓  올바른 방식: state (상대가 이미 응답해서 내 차례가 된 현재)
+
+        예)
+          타임라인: s0 →[O둠]→ s1 →[X둠]→ s2 →[O둠]→ ...
+          O의 이전 수(s0→s1)에 대한 next_state = s2  (O 차례가 다시 된 시점)
+          → 업데이트는 O 차례가 돌아왔을 때(state=s2)에 실행합니다.
+
+    first_player: 1(O 선공) 또는 -1(X 선공).
     """
-    state = env.reset()
+    state = env.reset(first_player)
 
-    # 에피소드 동안 각 에이전트의 마지막 (상태, 행동)을 기억합니다.
-    # 게임이 끝났을 때 "이전 수"도 결과 보상으로 다시 학습시키기 위해 필요합니다.
-    last_o = None   # (state, action)
-    last_x = None   # (state, action)
+    # 각 에이전트의 직전 (상태, 행동)을 기억합니다.
+    # 상대가 응답한 뒤 내 차례가 돌아왔을 때 비로소 Q-업데이트에 사용합니다.
+    last_o = None   # (prev_state, prev_action)
+    last_x = None   # (prev_state, prev_action)
 
-    result = "draw"   # 에피소드 결과 기록용
+    result = "draw"
 
     while not env.done:
         valid = env.get_valid_actions()
 
-        # ── 현재 플레이어 결정 ────────────────────────────────────────────
-        if env.current_player == 1:   # O 차례
+        # ── O 차례 ──────────────────────────────────────────────────────
+        if env.current_player == 1:
+
+            # ▶ 이전 O 수에 대한 Q-업데이트 (버그 수정 핵심)
+            #   last_o 의 next_state = 지금 O가 마주한 state (상대가 이미 응답 완료)
+            #   이전 코드는 next_state(O 직후 상태)를 썼는데, 그 상태는 X 차례이므로
+            #   O의 관점에서 "미래 최선 행동"을 올바르게 평가할 수 없었습니다.
+            if last_o is not None:
+                agent_o.learn(last_o[0], last_o[1], config.REWARD_STEP, state, False, valid)
+
+            # 행동 선택 및 실행
             action = agent_o.choose_action(state, valid)
             next_state, r_o, r_x, done = env.step(action)
 
-            # 잘못된 수(이미 채워진 칸)는 상태가 바뀌지 않으므로 즉시 패널티 학습
+            # 잘못된 수: 즉시 패널티 학습 후 재시도 (플레이어 교체 없음)
             if r_o == config.REWARD_INVALID:
-                agent_o.learn(state, action, r_o, next_state, False, env.get_valid_actions())
-                # 잘못된 수는 플레이어 교체 없이 다시 O 차례
+                agent_o.learn(state, action, r_o, state, False, valid)
                 continue
 
-            # 정상 수: 이전 O 수를 중간 보상으로 업데이트하고 현재 수를 기억
-            if last_o is not None:
-                agent_o.learn(last_o[0], last_o[1], config.REWARD_STEP, next_state, False, env.get_valid_actions())
-            last_o = (state, action)
-
-            # 게임 종료 시 최종 보상으로 양쪽 마지막 수를 업데이트
             if done:
+                # 종료 시: 현재 수(O 승/무)와 X의 직전 수(-1.0) 모두 최종 학습
                 agent_o.learn(state, action, r_o, next_state, True, [])
                 if last_x is not None:
                     agent_x.learn(last_x[0], last_x[1], r_x, next_state, True, [])
                 result = "O_win" if r_o == config.REWARD_WIN else "draw"
+            else:
+                last_o = (state, action)
 
-        else:   # X 차례
+        # ── X 차례 ──────────────────────────────────────────────────────
+        else:
+
+            # ▶ 이전 X 수에 대한 Q-업데이트 (동일한 원칙 적용)
+            #   last_x 의 next_state = 지금 X가 마주한 state (O가 이미 응답 완료)
+            if last_x is not None:
+                agent_x.learn(last_x[0], last_x[1], config.REWARD_STEP, state, False, valid)
+
             action = agent_x.choose_action(state, valid)
             next_state, r_o, r_x, done = env.step(action)
 
             if r_x == config.REWARD_INVALID:
-                agent_x.learn(state, action, r_x, next_state, False, env.get_valid_actions())
+                agent_x.learn(state, action, r_x, state, False, valid)
                 continue
-
-            if last_x is not None:
-                agent_x.learn(last_x[0], last_x[1], config.REWARD_STEP, next_state, False, env.get_valid_actions())
-            last_x = (state, action)
 
             if done:
                 agent_x.learn(state, action, r_x, next_state, True, [])
                 if last_o is not None:
                     agent_o.learn(last_o[0], last_o[1], r_o, next_state, True, [])
                 result = "X_win" if r_x == config.REWARD_WIN else "draw"
+            else:
+                last_x = (state, action)
 
         state = next_state
 
@@ -112,7 +136,11 @@ def train():
     start_time = time.time()
 
     for episode in range(1, config.NUM_EPISODES + 1):
-        result = run_episode(env, agent_o, agent_x)
+        # 에피소드마다 선공을 번갈아 줍니다.
+        # O가 항상 선공이면 O만 "빈 보드" 경험을 쌓아 구조적 유리함이 생깁니다.
+        # 홀수 판 = O 선공, 짝수 판 = X 선공으로 두 에이전트가 동등하게 학습합니다.
+        first_player = 1 if episode % 2 == 1 else -1
+        result = run_episode(env, agent_o, agent_x, first_player)
         counts[result] += 1
 
         # 탐험 비율 감소 — 에피소드가 끝날 때마다 한 번씩 줄입니다.
