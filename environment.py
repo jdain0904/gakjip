@@ -53,16 +53,13 @@ class TicTacToeEnv:
     # reset: 게임을 새로 시작합니다.
     # 학습 루프에서 한 판이 끝날 때마다 호출해 보드를 초기화합니다.
     # ─────────────────────────────────────────────────────────────────────────
-    def reset(self, first_player: int = 1):
+    def reset(self):
         """
         보드를 초기 상태로 되돌립니다.
-
-        first_player: 1(O 선공) 또는 -1(X 선공).
-        학습 루프에서 에피소드마다 번갈아 호출해야 두 에이전트가
-        선공·후공 모두 균등하게 경험할 수 있습니다.
+        틱택토 규칙에 따라 O가 항상 선공, X는 항상 후공입니다.
         """
         self.board = np.zeros(9, dtype=int)
-        self.current_player = first_player
+        self.current_player = 1   # O 선공 고정
         self.done = False
         return self._get_state()
 

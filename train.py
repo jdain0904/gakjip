@@ -18,16 +18,12 @@ from environment import TicTacToeEnv
 from agent import QLearningAgent
 
 
-def run_episode(
-    env: TicTacToeEnv,
-    agent_o: QLearningAgent,
-    agent_x: QLearningAgent,
-    first_player: int = 1,
-):
+def run_episode(env: TicTacToeEnv, agent_o: QLearningAgent, agent_x: QLearningAgent):
     """
     게임 한 판(에피소드)을 진행하고 양쪽 에이전트를 모두 학습시킵니다.
+    O는 항상 선공, X는 항상 후공입니다 (틱택토 규칙).
 
-    핵심 설계 원칙 — "2수 후 상태"로 Q-업데이트:
+    핵심 설계 원칙 — "상대 응답 후 상태"로 Q-업데이트:
         Q-러닝 수식:  Q(s, a) ← r + γ · max Q(s', a')
         2인 게임에서 s'는 "내가 다음 번에 실제로 마주할 상태"여야 합니다.
         즉 상대가 응답한 뒤의 상태 = 내 차례가 다시 돌아왔을 때의 state.
@@ -39,10 +35,8 @@ def run_episode(
           타임라인: s0 →[O둠]→ s1 →[X둠]→ s2 →[O둠]→ ...
           O의 이전 수(s0→s1)에 대한 next_state = s2  (O 차례가 다시 된 시점)
           → 업데이트는 O 차례가 돌아왔을 때(state=s2)에 실행합니다.
-
-    first_player: 1(O 선공) 또는 -1(X 선공).
     """
-    state = env.reset(first_player)
+    state = env.reset()
 
     # 각 에이전트의 직전 (상태, 행동)을 기억합니다.
     # 상대가 응답한 뒤 내 차례가 돌아왔을 때 비로소 Q-업데이트에 사용합니다.
@@ -136,11 +130,7 @@ def train():
     start_time = time.time()
 
     for episode in range(1, config.NUM_EPISODES + 1):
-        # 에피소드마다 선공을 번갈아 줍니다.
-        # O가 항상 선공이면 O만 "빈 보드" 경험을 쌓아 구조적 유리함이 생깁니다.
-        # 홀수 판 = O 선공, 짝수 판 = X 선공으로 두 에이전트가 동등하게 학습합니다.
-        first_player = 1 if episode % 2 == 1 else -1
-        result = run_episode(env, agent_o, agent_x, first_player)
+        result = run_episode(env, agent_o, agent_x)
         counts[result] += 1
 
         # 탐험 비율 감소 — 에피소드가 끝날 때마다 한 번씩 줄입니다.
