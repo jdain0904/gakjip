@@ -83,12 +83,14 @@ def play_vs_human():
     """
     사람이 터미널에서 로봇과 직접 대전합니다.
 
-    칸 번호 안내:
-        0 | 1 | 2
-        ---------
-        3 | 4 | 5
-        ---------
-        6 | 7 | 8
+    칸 번호 안내 (4×4):
+         0 |  1 |  2 |  3
+        ----+----+----+----
+         4 |  5 |  6 |  7
+        ----+----+----+----
+         8 |  9 | 10 | 11
+        ----+----+----+----
+        12 | 13 | 14 | 15
     """
     print("=" * 60)
     print("  사람 vs 로봇 대전")
@@ -110,8 +112,9 @@ def play_vs_human():
 
     human_symbol = "X" if robot_is_o else "O"
     robot_symbol = "O" if robot_is_o else "X"
+    n_cells = config.BOARD_SIZE * config.BOARD_SIZE
     print(f"\n당신은 [{human_symbol}] 로봇은 [{robot_symbol}]  (O가 먼저 시작)")
-    print("칸 번호: 0~8 을 입력하세요.\n")
+    print(f"칸 번호: 0~{n_cells - 1} 을 입력하세요.\n")
 
     state = env.reset()
 
