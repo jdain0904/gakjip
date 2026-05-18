@@ -125,7 +125,9 @@ class QLearningAgent:
     # ─────────────────────────────────────────────────────────────────────────
     def save(self, path: str):
         """Q-테이블과 epsilon 을 pkl 파일로 저장합니다."""
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        dir_name = os.path.dirname(path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
         with open(path, "wb") as f:
             pickle.dump({"q_table": self.q_table, "epsilon": self.epsilon}, f)
         print(f"[{self.name}] 모델 저장 완료 → {path}")
