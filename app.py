@@ -42,15 +42,17 @@ sessions: dict[str, dict] = {}
 # 시작 시 모델 로딩 / 학습
 # =============================================================================
 
-QUICK_EPISODES = int(os.environ.get("TRAIN_EPISODES", "200000"))
+QUICK_EPISODES = int(os.environ.get("TRAIN_EPISODES", "100000"))
+_UPDATE_INTERVAL = max(1, QUICK_EPISODES // 200)  # 200번 업데이트
 
 
 def _quick_train():
-    """모델이 없을 때 백그라운드에서 빠르게 학습합니다."""
+    """모델이 없을 때 백그라운드에서 학습합니다."""
     global agent_o, agent_x, agents_ready
 
     train_status["running"] = True
     train_status["total"] = QUICK_EPISODES
+    train_status["episode"] = 0
 
     env = TicTacToeEnv()
     ao = QLearningAgent("O")
@@ -61,7 +63,7 @@ def _quick_train():
         ao.decay_epsilon()
         ax.decay_epsilon()
 
-        if ep % 20000 == 0:
+        if ep % _UPDATE_INTERVAL == 0:
             train_status["episode"] = ep
 
     ao.save(config.MODEL_PATH_O)
@@ -353,8 +355,13 @@ HTML = r"""<!DOCTYPE html>
     height: 8px;
     background: #0284c7;
     width: 0%;
-    transition: width 0.3s;
+    transition: width 0.5s;
   }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  .pulsing { animation: pulse 1.2s ease-in-out infinite; }
 </style>
 </head>
 <body>
@@ -384,6 +391,7 @@ let gameId = null;
 let myTurn = false;
 let robotSide = 'X';
 let boardReady = false;
+let trainStart = null;
 
 const boardEl = document.getElementById('board');
 const msgEl = document.getElementById('message');
@@ -427,24 +435,35 @@ function onCellClick(idx) {
 }
 
 // ── API 호출 ─────────────────────────────────────────────────────────────
+function elapsedStr() {
+  if (!trainStart) return '';
+  const sec = Math.floor((Date.now() - trainStart) / 1000);
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return m > 0 ? ` (${m}분 ${s}초 경과)` : ` (${s}초 경과)`;
+}
+
 async function checkReady() {
   try {
     const r = await fetch('/api/train_status');
     const d = await r.json();
     if (d.ready) {
       statusEl.textContent = '✅ AI 준비 완료 — 새 게임을 시작하세요';
+      statusEl.classList.remove('pulsing');
       btnNew.disabled = false;
       progressWrap.style.display = 'none';
       boardReady = true;
     } else if (d.running) {
+      if (!trainStart) trainStart = Date.now();
+      statusEl.classList.add('pulsing');
       const pct = d.total > 0 ? Math.round(d.episode / d.total * 100) : 0;
-      statusEl.textContent = `🧠 AI 학습 중... ${d.episode.toLocaleString()} / ${d.total.toLocaleString()} (${pct}%)`;
+      statusEl.textContent = `🧠 AI 학습 중... ${d.episode.toLocaleString()} / ${d.total.toLocaleString()} (${pct}%)${elapsedStr()}`;
       progressWrap.style.display = 'block';
       progressBar.style.width = pct + '%';
-      setTimeout(checkReady, 2000);
-    } else {
-      statusEl.textContent = '⏳ AI 초기화 중...';
       setTimeout(checkReady, 1000);
+    } else {
+      statusEl.classList.add('pulsing');
+      statusEl.textContent = '⏳ AI 초기화 중...';
+      setTimeout(checkReady, 800);
     }
   } catch {
     setTimeout(checkReady, 2000);
