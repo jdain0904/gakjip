@@ -3,81 +3,85 @@ import random
 from dataclasses import dataclass, field
 from typing import Union
 
-from .items import Weapon, Supply, Vehicle, WEAPONS, SUPPLIES, VEHICLES
+from .items import (
+    Weapon, Supply, Vehicle, Ammo, WEAPONS, SUPPLIES, VEHICLES,
+    CAL_556, CAL_762, CAL_9MM, CAL_12G, CAL_50AE, CAL_BOLT,
+    CAL_300, CAL_50BMG, CAL_MORTAR, SPECIAL_CALIBERS,
+)
 
-Item = Union[Weapon, Supply, Vehicle]
+Item = Union[Weapon, Supply, Vehicle, Ammo]
 
+# (max_roll, category, name_or_caliber, ammo_caliber|None, ammo_count)
+# category "ammo" → pure ammo drop; name_or_caliber = caliber string
 
-# ── 집 카드 룻 테이블 (0~60) ─────────────────────────────────────────────────
-# 낮은 번호 = 일반 아이템, 높은 번호 = 희귀 아이템
-
-_HOUSE_TABLE: list[tuple[int, str, str]] = [
-    # (max_roll, category, item_name)
-    (5,  "supply",  "붕대"),
-    (11, "weapon",  "Deagle"),
-    (17, "weapon",  "S686"),
-    (22, "weapon",  "수류탄"),
-    (27, "weapon",  "화염병"),
-    (32, "weapon",  "Beryl"),
-    (36, "weapon",  "M416"),
-    (40, "supply",  "구급상자"),
-    (44, "weapon",  "VSS"),
-    (48, "weapon",  "벡터"),
-    (51, "vehicle", "UAZ"),
-    (54, "weapon",  "AUG"),
-    (56, "weapon",  "석궁"),
-    (58, "supply",  "연막탄"),
-    (59, "weapon",  "Ace45"),
-    (60, "supply",  "의료용키트"),
+_HOUSE_TABLE: list[tuple[int, str, str, str | None, int]] = [
+    (4,  "supply",  "붕대",    None,     0),
+    (9,  "ammo",    CAL_9MM,   CAL_9MM,  40),
+    (14, "weapon",  "Deagle",  CAL_50AE, 20),
+    (19, "weapon",  "S686",    CAL_12G,  16),
+    (23, "thrown",  "수류탄",  None,     0),
+    (27, "thrown",  "화염병",  None,     0),
+    (32, "weapon",  "Beryl",   CAL_762,  20),
+    (37, "weapon",  "M416",    CAL_556,  30),
+    (41, "supply",  "구급상자", None,    0),
+    (45, "ammo",    CAL_556,   CAL_556,  60),
+    (48, "weapon",  "벡터",    CAL_9MM,  30),
+    (51, "vehicle", "UAZ",     None,     0),
+    (54, "weapon",  "AUG",     CAL_556,  30),
+    (56, "weapon",  "VSS",     CAL_9MM,  30),
+    (58, "weapon",  "석궁",    CAL_BOLT, 10),
+    (59, "weapon",  "Ace45",   CAL_9MM,  25),
+    (60, "supply",  "연막탄",  None,     0),
 ]
 
-# ── 보급 카드 룻 테이블 (0~60) ───────────────────────────────────────────────
-# 고성능 무기·차량 중심
-
-_SUPPLY_TABLE: list[tuple[int, str, str]] = [
-    (8,  "weapon",  "P90"),
-    (15, "supply",  "진통제"),
-    (21, "weapon",  "SLR"),
-    (26, "weapon",  "SKS"),
-    (31, "weapon",  "Mk14"),
-    (36, "weapon",  "M24"),
-    (40, "weapon",  "AWM"),
-    (44, "weapon",  "링스-AMR"),
-    (47, "vehicle", "버기"),
-    (50, "vehicle", "미라도"),
-    (53, "vehicle", "쿠페"),
-    (56, "vehicle", "BRDM2"),
-    (58, "weapon",  "M249"),
-    (59, "weapon",  "박격포"),
-    (60, "supply",  "의료용키트"),
+_SUPPLY_TABLE: list[tuple[int, str, str, str | None, int]] = [
+    (7,  "weapon",  "P90",      CAL_9MM,    40),
+    (13, "supply",  "진통제",   None,       0),
+    (18, "weapon",  "SLR",      CAL_762,    20),
+    (23, "weapon",  "SKS",      CAL_762,    20),
+    (28, "weapon",  "Mk14",     CAL_762,    20),
+    (33, "weapon",  "M24",      CAL_762,    10),
+    (38, "weapon",  "AWM",      CAL_300,    20),
+    (42, "weapon",  "링스-AMR", CAL_50BMG,  10),
+    (46, "vehicle", "버기",     None,       0),
+    (49, "vehicle", "미라도",   None,       0),
+    (52, "vehicle", "쿠페",     None,       0),
+    (55, "vehicle", "BRDM2",    None,       0),
+    (57, "weapon",  "M249",     CAL_556,    75),
+    (59, "weapon",  "박격포",   CAL_MORTAR, 3),
+    (60, "supply",  "의료용키트", None,     0),
 ]
 
 
-def _lookup(table: list[tuple[int, str, str]], roll: int) -> Item:
-    for max_roll, category, name in table:
+def _lookup(table: list, roll: int) -> list[Item]:
+    for max_roll, category, name, ammo_cal, ammo_cnt in table:
         if roll <= max_roll:
-            if category == "weapon":
-                return WEAPONS[name]
-            if category == "supply":
-                return SUPPLIES[name]
-            if category == "vehicle":
-                return VEHICLES[name]
-    # fallback
-    return WEAPONS["Deagle"]
+            result: list[Item] = []
+            if category == "ammo":
+                result.append(Ammo(name, ammo_cnt, name in SPECIAL_CALIBERS))
+            elif category in ("weapon",):
+                w = WEAPONS[name].copy()
+                result.append(w)
+                if ammo_cal and ammo_cnt > 0:
+                    result.append(Ammo(ammo_cal, ammo_cnt, ammo_cal in SPECIAL_CALIBERS))
+            elif category == "thrown":
+                result.append(WEAPONS[name].copy())
+            elif category == "supply":
+                result.append(SUPPLIES[name])
+            elif category == "vehicle":
+                result.append(VEHICLES[name])
+            return result
+    return [WEAPONS["Deagle"].copy(), Ammo(CAL_50AE, 10)]
 
-
-# ── 카드 클래스 ──────────────────────────────────────────────────────────────
 
 @dataclass
 class HouseCard:
-    """집 카드 — 사용 시 pre-assigned 번호로 아이템 획득."""
     roll: int = field(default_factory=lambda: random.randint(0, 60))
 
-    def open(self) -> Item:
+    def open(self) -> list[Item]:
         return _lookup(_HOUSE_TABLE, self.roll)
 
     def peek(self) -> str:
-        """카드 겉면(번호)만 공개."""
         return f"집 카드 [번호:{self.roll}]"
 
     def __str__(self) -> str:
@@ -86,10 +90,9 @@ class HouseCard:
 
 @dataclass
 class SupplyDropCard:
-    """보급 카드 — 게임당 1장, 고급 아이템."""
     roll: int = field(default_factory=lambda: random.randint(0, 60))
 
-    def open(self) -> Item:
+    def open(self) -> list[Item]:
         return _lookup(_SUPPLY_TABLE, self.roll)
 
     def peek(self) -> str:

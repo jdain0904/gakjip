@@ -4,7 +4,8 @@ import time
 
 from .environment import GameEnv, ACTION_MOVE, ACTION_USE_CARD, ACTION_PASS
 from .visualize import (
-    render_state, print_log, print_actions, show_winner, clear
+    render_state, print_log, print_actions, show_winner,
+    show_card_draw_animation, clear,
 )
 from . import ai as ai_module
 
@@ -19,7 +20,6 @@ def pause(msg: str = "  [Enter 키를 누르세요...]"):
 
 
 # ── 인간 입력 ─────────────────────────────────────────────────────────────────
-
 def human_pick_action(env: GameEnv) -> dict:
     actions = env.get_valid_actions()
     render_state(env)
@@ -34,7 +34,7 @@ def human_pick_action(env: GameEnv) -> dict:
             if 0 <= idx < len(actions):
                 act = actions[idx]
                 if act.get("usable") is False:
-                    print(f"  {RED}사거리가 부족합니다. 먼저 접근하세요.{RESET}")
+                    print(f"  {RED}사거리 또는 탄약이 부족합니다.{RESET}")
                     continue
                 return act
         except ValueError:
@@ -43,9 +43,7 @@ def human_pick_action(env: GameEnv) -> dict:
 
 
 # ── 게임 루프 ─────────────────────────────────────────────────────────────────
-
 def play_game(env: GameEnv, ai_delay: float = 0.6) -> None:
-    """메인 게임 루프."""
     env.reset()
 
     while not env.done:
@@ -59,11 +57,16 @@ def play_game(env: GameEnv, ai_delay: float = 0.6) -> None:
             time.sleep(ai_delay)
             action = ai_module.choose_action(env)
             print(f"  선택: {action['label']}")
-            time.sleep(ai_delay * 0.8)
+            time.sleep(ai_delay * 0.6)
 
         state, done = env.step(action)
 
-        # 로그 출력
+        # 카드 드로우 애니메이션
+        drawn, is_supply = env.flush_drawn_items()
+        if drawn:
+            quick = not p.is_human
+            show_card_draw_animation(drawn, is_supply, p.name, quick=quick)
+
         lines = env.flush_log()
         render_state(env)
         print_log(lines)
@@ -72,16 +75,14 @@ def play_game(env: GameEnv, ai_delay: float = 0.6) -> None:
             if p.is_human:
                 pause()
             else:
-                time.sleep(ai_delay)
+                time.sleep(ai_delay * 0.5)
 
     show_winner(env)
     pause("  [Enter로 종료]")
 
 
 # ── AI vs AI 시뮬레이션 ───────────────────────────────────────────────────────
-
 def simulate(n: int = 5, verbose: bool = True) -> dict:
-    """AI vs AI n판 시뮬레이션. 통계 반환."""
     results = {"p1": 0, "p2": 0, "draw": 0}
 
     for game_num in range(1, n + 1):
@@ -107,8 +108,7 @@ def simulate(n: int = 5, verbose: bool = True) -> dict:
     return results
 
 
-# ── 진입점 ───────────────────────────────────────────────────────────────────
-
+# ── 직접 실행 ─────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     clear()
     print(f"\n  {BOLD}=== PUBG 보드게임 ==={RESET}")
