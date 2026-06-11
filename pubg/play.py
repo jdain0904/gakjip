@@ -82,11 +82,12 @@ def play_game(env: GameEnv, ai_delay: float = 0.6) -> None:
 
 
 # ── AI vs AI 시뮬레이션 ───────────────────────────────────────────────────────
-def simulate(n: int = 5, verbose: bool = True) -> dict:
+def simulate(n: int = 5, verbose: bool = True, map_config=None) -> dict:
     results = {"p1": 0, "p2": 0, "draw": 0}
 
     for game_num in range(1, n + 1):
-        env = GameEnv("AI-1", "AI-2", p1_human=False, p2_human=False)
+        env = GameEnv("AI-1", "AI-2", p1_human=False, p2_human=False,
+                      map_config=map_config)
         env.reset()
 
         while not env.done:

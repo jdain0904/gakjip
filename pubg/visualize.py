@@ -1,6 +1,7 @@
 """
-PUBG Miramar 스타일 터미널 UI
-- 2D 사막 지형 + 플레이어 위치
+PUBG 멀티맵 터미널 UI
+- 4개 맵 테마 (비켄디/에란겔/사녹/미라마)
+- 2D 지형 + 플레이어 위치
 - 카드 드로우 애니메이션 (유희왕 마스터듀얼 스타일)
 - 현재 턴 플레이어만 인벤토리 공개
 """
@@ -14,19 +15,21 @@ BOLD   = "\033[1m"
 DIM    = "\033[2m"
 BLINK  = "\033[5m"
 
-SAND   = "\033[38;5;214m"
-SAND_D = "\033[33m"
-ROCK   = "\033[38;5;240m"
-BUILD  = "\033[38;5;252m"
-ZONEC  = "\033[94m"
+# 고정 UI 색상 (맵 무관)
 RED    = "\033[91m"
 GREEN  = "\033[92m"
 YELLOW = "\033[93m"
 CYAN   = "\033[96m"
 WHITE  = "\033[97m"
 ORANGE = "\033[38;5;208m"
-PURPLE = "\033[38;5;135m"
 GOLD   = "\033[38;5;220m"
+
+# 레거시 (기본 미라마 테마, _get_map() 대체 전 fallback)
+SAND   = "\033[38;5;214m"
+SAND_D = "\033[33m"
+ROCK   = "\033[38;5;240m"
+BUILD  = "\033[38;5;252m"
+ZONEC  = "\033[94m"
 
 P1C    = "\033[92;1m"
 P2C    = "\033[91;1m"
@@ -41,16 +44,32 @@ P1_INIT = 4
 P2_INIT = TW - 5
 TRAVEL  = (TW // 2) - P1_INIT - 3
 
+# ── 현재 선택된 맵 ────────────────────────────────────────────────────────────
+_current_map = None   # MapConfig | None
 
-# ── 지형 생성 ─────────────────────────────────────────────────────────────────
-def _build_terrain() -> list[list[str]]:
-    rng  = _rng.Random(7777)
+
+def set_map(config) -> None:
+    global _current_map
+    _current_map = config
+
+
+def _get_map():
+    """현재 맵 반환. 미설정 시 MAP_MIRAMAR 기본값."""
+    if _current_map is not None:
+        return _current_map
+    from .maps import MAP_MIRAMAR
+    return MAP_MIRAMAR
+
+
+# ── 지형 생성 (맵별) ──────────────────────────────────────────────────────────
+def _build_terrain_for(config) -> list[list[str]]:
+    rng  = _rng.Random(config.seed)
     grid = [['.'] * TW for _ in range(TH)]
     for r in range(TH):
         for c in range(TW):
             v = rng.random()
-            if v < 0.15:   grid[r][c] = '~'
-            elif v < 0.20: grid[r][c] = '^'
+            if v < config.density_rough:            grid[r][c] = '~'
+            elif v < config.density_rough + config.density_rock: grid[r][c] = '^'
 
     def box(r, c, iw, ih=3):
         ew = iw + 2
@@ -72,7 +91,17 @@ def _build_terrain() -> list[list[str]]:
     return grid
 
 
-_BASE = _build_terrain()
+_TERRAINS: dict = {}   # map_id → terrain grid (lazy)
+
+
+def _get_terrain(config) -> list[list[str]]:
+    if config.id not in _TERRAINS:
+        _TERRAINS[config.id] = _build_terrain_for(config)
+    return _TERRAINS[config.id]
+
+
+# 레거시 호환
+_BASE = None   # 사용 시점에 lazily 초기화됨
 
 
 def _ansi_len(s: str) -> int:
@@ -98,17 +127,21 @@ def _pad_to(s: str, width: int, fill: str = ' ') -> str:
     return s + fill * max(0, width - _wcslen(s))
 
 
-def _color_ch(ch: str) -> str:
-    if ch in '╔═╗║╚╝':  return f"{BUILD}{ch}{RESET}"
+def _color_ch(ch: str, cfg=None) -> str:
+    if cfg is None:
+        cfg = _get_map()
+    if ch in '╔═╗║╚╝':  return f"{cfg.col_build}{ch}{RESET}"
     if ch == ' ':        return ' '
-    if ch == '^':        return f"{ROCK}▲{RESET}"
-    if ch == '~':        return f"{SAND}≈{RESET}"
-    return f"{DIM}{SAND_D}.{RESET}"
+    if ch == '^':        return f"{cfg.col_rock}{cfg.ch_rock}{RESET}"
+    if ch == '~':        return f"{cfg.col_terrain}{cfg.ch_rough}{RESET}"
+    return f"{DIM}{cfg.col_terrain2}.{RESET}"
 
 
 # ── 지도 렌더 ─────────────────────────────────────────────────────────────────
 def _render_map(env) -> list[str]:
     from .environment import INITIAL_DISTANCE
+    cfg   = _get_map()
+    base  = _get_terrain(cfg)
     dist  = max(0, env.distance)
     ratio = min(1.0, (INITIAL_DISTANCE - dist) / INITIAL_DISTANCE)
 
@@ -123,11 +156,11 @@ def _render_map(env) -> list[str]:
     z_right = min(TW - 1, TW - 1 - int((1 - safe / INITIAL_DISTANCE) * (TW // 2 - 4)))
 
     lines = []
-    for ri, row in enumerate(_BASE):
+    for ri, row in enumerate(base):
         buf = []
         for ci, ch in enumerate(row):
             if in_zone and safe < INITIAL_DISTANCE and (ci == z_left or ci == z_right):
-                buf.append(f"{BLINK}{ZONEC}│{RESET}")
+                buf.append(f"{BLINK}{cfg.col_zone}│{RESET}")
                 continue
             if ri == PROW:
                 if ci == p1c:
@@ -138,7 +171,7 @@ def _render_map(env) -> list[str]:
                     icon = '◎' if env.p2.is_alive else '✕'
                     buf.append(f"{P2C}{icon}{RESET}")
                     continue
-            buf.append(_color_ch(ch))
+            buf.append(_color_ch(ch, cfg))
         lines.append(''.join(buf))
     return lines
 
@@ -152,41 +185,53 @@ def _hp_bar(hp: int, w: int = 18) -> str:
     return f"{BOLD}{c}{'█'*filled}{'░'*empty}{RESET} {hp:>3}/100"
 
 
-# ── 박스 유틸 ─────────────────────────────────────────────────────────────────
+# ── 박스 유틸 (맵 색상 적용) ──────────────────────────────────────────────────
+def _bc() -> str:
+    """현재 맵의 박스/테두리 색상."""
+    return _get_map().col_terrain2
+
 def _top() -> str:
-    return f"{SAND_D}╔{'═'*(BOX_W-2)}╗{RESET}"
+    c = _bc()
+    return f"{c}╔{'═'*(BOX_W-2)}╗{RESET}"
 
 def _bot() -> str:
-    return f"{SAND_D}╚{'═'*(BOX_W-2)}╝{RESET}"
+    c = _bc()
+    return f"{c}╚{'═'*(BOX_W-2)}╝{RESET}"
 
 def _div(lc='╠', mc='═', rc='╣') -> str:
-    return f"{SAND_D}{lc}{mc*(BOX_W-2)}{rc}{RESET}"
+    c = _bc()
+    return f"{c}{lc}{mc*(BOX_W-2)}{rc}{RESET}"
 
 def _row(content: str) -> str:
+    c   = _bc()
     pad = INNER_W - _wcslen(content)
-    return f"{SAND_D}║{RESET}{content}{' '*max(0,pad)}{SAND_D}║{RESET}"
+    return f"{c}║{RESET}{content}{' '*max(0,pad)}{c}║{RESET}"
 
 def _split_div() -> str:
+    c = _bc()
     h = INNER_W // 2
-    return f"{SAND_D}╠{'═'*h}╦{'═'*(INNER_W-h-1)}╣{RESET}"
+    return f"{c}╠{'═'*h}╦{'═'*(INNER_W-h-1)}╣{RESET}"
 
 def _split_bot() -> str:
+    c = _bc()
     h = INNER_W // 2
-    return f"{SAND_D}╠{'═'*h}╩{'═'*(INNER_W-h-1)}╣{RESET}"
+    return f"{c}╠{'═'*h}╩{'═'*(INNER_W-h-1)}╣{RESET}"
 
 def _split_row(left: str, right: str) -> str:
+    c     = _bc()
     h     = INNER_W // 2
     l_pad = h - _wcslen(left)
     r_pad = INNER_W - h - 1 - _wcslen(right)
-    return (f"{SAND_D}║{RESET}{left}{' '*max(0,l_pad)}"
-            f"{SAND_D}║{RESET}{right}{' '*max(0,r_pad)}"
-            f"{SAND_D}║{RESET}")
+    return (f"{c}║{RESET}{left}{' '*max(0,l_pad)}"
+            f"{c}║{RESET}{right}{' '*max(0,r_pad)}"
+            f"{c}║{RESET}")
 
 
 def _zone_bar(safe: int, max_safe: int = 50, w: int = 40) -> str:
+    cfg    = _get_map()
     ratio  = max(0, safe / max_safe)
     filled = int(ratio * w)
-    return f"{ZONEC}{'▰'*filled}{DIM}{'▱'*(w-filled)}{RESET}"
+    return f"{cfg.col_zone}{'▰'*filled}{DIM}{'▱'*(w-filled)}{RESET}"
 
 
 def _log_color(msg: str) -> str:
@@ -250,6 +295,7 @@ def _inv_hidden() -> list[str]:
 def render_state(env):
     clear()
     from .environment import INITIAL_DISTANCE
+    cfg    = _get_map()
 
     dist   = env.distance
     turn   = env.turn
@@ -257,15 +303,16 @@ def render_state(env):
     danger = dist > safe
     cur_pid = env.cur_pid
 
-    title  = f" {BOLD}{ORANGE}🏜  M I R A M A R{RESET}  {DIM}Battle Royale{RESET}"
-    tinfo  = f"{SAND_D}턴:{RESET}{BOLD}{turn}{RESET}  {SAND_D}거리:{RESET}{BOLD}{CYAN}{dist}{RESET}"
+    map_icon = {"vikendi":"❄","erangel":"🌾","sanhok":"🌿","miramar":"🏜"}.get(cfg.id,"🗺")
+    title  = f" {BOLD}{cfg.col_title}{map_icon}  {cfg.name_ko}  {cfg.name_en}{RESET}  {DIM}Battle Royale{RESET}"
+    tinfo  = f"{cfg.col_terrain2}턴:{RESET}{BOLD}{turn}{RESET}  {cfg.col_terrain2}거리:{RESET}{BOLD}{CYAN}{dist}{RESET}"
     zinfo  = (f"{RED}{BLINK}⚠ 자기장!{RESET}  " if danger else "") + \
-             f"{ZONEC}안전:{safe}칸{RESET}"
+             f"{cfg.col_zone}안전:{safe}칸{RESET}"
 
     print(_top())
     print(_row(f" {title}  {tinfo}  {zinfo}"))
     zone_bar   = _zone_bar(safe)
-    print(_row(f" {ZONEC}ZONE{RESET} {zone_bar} {BOLD}{safe:>3}{RESET}m "))
+    print(_row(f" {cfg.col_zone}ZONE{RESET} {zone_bar} {BOLD}{safe:>3}{RESET}m "))
     print(_div())
 
     # 지도

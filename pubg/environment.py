@@ -18,9 +18,15 @@ REDZONE_DAMAGE   = 50
 
 class GameEnv:
     def __init__(self, p1_name: str = "플레이어1", p2_name: str = "플레이어2",
-                 p1_human: bool = True, p2_human: bool = False):
+                 p1_human: bool = True, p2_human: bool = False,
+                 map_config=None):
         self.p1 = Player(0, p1_name, p1_human)
         self.p2 = Player(1, p2_name, p2_human)
+        # 맵 설정 (reset에서 변경하지 않음)
+        if map_config is None:
+            from .maps import MAP_MIRAMAR
+            map_config = MAP_MIRAMAR
+        self.map_config = map_config
 
         self.turn:     int  = 1
         self.cur_pid:  int  = 0
