@@ -1,7 +1,7 @@
 """
 PUBG 멀티맵 터미널 UI
 - 4개 맵 테마 (비켄디/에란겔/사녹/미라마)
-- 2D 지형 + 플레이어 위치
+- MapConfig 기반 색상/기호 동적 적용
 - 카드 드로우 애니메이션 (유희왕 마스터듀얼 스타일)
 - 현재 턴 플레이어만 인벤토리 공개
 """
@@ -22,9 +22,10 @@ YELLOW = "\033[93m"
 CYAN   = "\033[96m"
 WHITE  = "\033[97m"
 ORANGE = "\033[38;5;208m"
+PURPLE = "\033[38;5;135m"
 GOLD   = "\033[38;5;220m"
 
-# 레거시 (기본 미라마 테마, _get_map() 대체 전 fallback)
+# 레거시 fallback (Miramar 기본값)
 SAND   = "\033[38;5;214m"
 SAND_D = "\033[33m"
 ROCK   = "\033[38;5;240m"
@@ -49,6 +50,7 @@ _current_map = None   # MapConfig | None
 
 
 def set_map(config) -> None:
+    """현재 활성 맵 설정."""
     global _current_map
     _current_map = config
 
@@ -62,14 +64,17 @@ def _get_map():
 
 
 # ── 지형 생성 (맵별) ──────────────────────────────────────────────────────────
-def _build_terrain_for(config) -> list[list[str]]:
+def _build_terrain_for(config) -> list:
+    """MapConfig 기반 지형 그리드 생성."""
     rng  = _rng.Random(config.seed)
     grid = [['.'] * TW for _ in range(TH)]
     for r in range(TH):
         for c in range(TW):
             v = rng.random()
-            if v < config.density_rough:            grid[r][c] = '~'
-            elif v < config.density_rough + config.density_rock: grid[r][c] = '^'
+            if v < config.density_rough:
+                grid[r][c] = '~'
+            elif v < config.density_rough + config.density_rock:
+                grid[r][c] = '^'
 
     def box(r, c, iw, ih=3):
         ew = iw + 2
@@ -91,17 +96,14 @@ def _build_terrain_for(config) -> list[list[str]]:
     return grid
 
 
-_TERRAINS: dict = {}   # map_id → terrain grid (lazy)
+_TERRAINS = {}   # map_id -> terrain grid (lazy populated)
 
 
-def _get_terrain(config) -> list[list[str]]:
+def _get_terrain(config) -> list:
+    """맵 ID 기준 지형 그리드 반환 (캐시)."""
     if config.id not in _TERRAINS:
         _TERRAINS[config.id] = _build_terrain_for(config)
     return _TERRAINS[config.id]
-
-
-# 레거시 호환
-_BASE = None   # 사용 시점에 lazily 초기화됨
 
 
 def _ansi_len(s: str) -> int:
@@ -128,17 +130,86 @@ def _pad_to(s: str, width: int, fill: str = ' ') -> str:
 
 
 def _color_ch(ch: str, cfg=None) -> str:
+    """MapConfig 색상으로 지형 문자 채색."""
     if cfg is None:
         cfg = _get_map()
     if ch in '╔═╗║╚╝':  return f"{cfg.col_build}{ch}{RESET}"
-    if ch == ' ':        return ' '
-    if ch == '^':        return f"{cfg.col_rock}{cfg.ch_rock}{RESET}"
-    if ch == '~':        return f"{cfg.col_terrain}{cfg.ch_rough}{RESET}"
+    if ch == ' ':         return ' '
+    if ch == '^':         return f"{cfg.col_rock}{cfg.ch_rock}{RESET}"
+    if ch == '~':         return f"{cfg.col_terrain}{cfg.ch_rough}{RESET}"
     return f"{DIM}{cfg.col_terrain2}.{RESET}"
 
 
+# ── 박스 유틸 ─────────────────────────────────────────────────────────────────
+def _top(cfg=None) -> str:
+    c = (cfg if cfg is not None else _get_map()).col_terrain2
+    return f"{c}╔{'═'*(BOX_W-2)}╗{RESET}"
+
+
+def _bot(cfg=None) -> str:
+    c = (cfg if cfg is not None else _get_map()).col_terrain2
+    return f"{c}╚{'═'*(BOX_W-2)}╝{RESET}"
+
+
+def _div(lc='╠', mc='═', rc='╣', cfg=None) -> str:
+    c = (cfg if cfg is not None else _get_map()).col_terrain2
+    return f"{c}{lc}{mc*(BOX_W-2)}{rc}{RESET}"
+
+
+def _row(content: str, cfg=None) -> str:
+    c   = (cfg if cfg is not None else _get_map()).col_terrain2
+    pad = INNER_W - _wcslen(content)
+    return f"{c}║{RESET}{content}{' '*max(0,pad)}{c}║{RESET}"
+
+
+def _split_div(cfg=None) -> str:
+    c = (cfg if cfg is not None else _get_map()).col_terrain2
+    h = INNER_W // 2
+    return f"{c}╠{'═'*h}╦{'═'*(INNER_W-h-1)}╣{RESET}"
+
+
+def _split_bot(cfg=None) -> str:
+    c = (cfg if cfg is not None else _get_map()).col_terrain2
+    h = INNER_W // 2
+    return f"{c}╠{'═'*h}╩{'═'*(INNER_W-h-1)}╣{RESET}"
+
+
+def _split_row(left: str, right: str, cfg=None) -> str:
+    c     = (cfg if cfg is not None else _get_map()).col_terrain2
+    h     = INNER_W // 2
+    l_pad = h - _wcslen(left)
+    r_pad = INNER_W - h - 1 - _wcslen(right)
+    return (f"{c}║{RESET}{left}{' '*max(0,l_pad)}"
+            f"{c}║{RESET}{right}{' '*max(0,r_pad)}"
+            f"{c}║{RESET}")
+
+
+def _zone_bar(safe: int, max_safe: int = 50, w: int = 40) -> str:
+    ratio  = max(0, safe / max_safe)
+    filled = int(ratio * w)
+    return f"{ZONEC}{'▰'*filled}{DIM}{'▱'*(w-filled)}{RESET}"
+
+
+def _log_color(msg: str) -> str:
+    if any(k in msg for k in ("💥", "즉사", "HP 0", "승리", "🏆")):
+        return f"{RED}{msg}{RESET}"
+    if any(k in msg for k in ("💊", "회복", "+", "💉")):
+        return f"{GREEN}{msg}{RESET}"
+    if any(k in msg for k in ("🔫", "공격", "탄약")):
+        return f"{YELLOW}{msg}{RESET}"
+    if any(k in msg for k in ("📦", "획득", "개봉", "🔶")):
+        return f"{CYAN}{msg}{RESET}"
+    if any(k in msg for k in ("🌀", "자기장")):
+        return f"{ZONEC}{msg}{RESET}"
+    if "💣" in msg:
+        return f"{ORANGE}{msg}{RESET}"
+    if "🚶" in msg or "이동" in msg:
+        return f"{SAND_D}{msg}{RESET}"
+    return f"{DIM}{WHITE}{msg}{RESET}"
+
+
 # ── 지도 렌더 ─────────────────────────────────────────────────────────────────
-def _render_map(env) -> list[str]:
+def _render_map(env) -> list:
     from .environment import INITIAL_DISTANCE
     cfg   = _get_map()
     base  = _get_terrain(cfg)
@@ -185,75 +256,8 @@ def _hp_bar(hp: int, w: int = 18) -> str:
     return f"{BOLD}{c}{'█'*filled}{'░'*empty}{RESET} {hp:>3}/100"
 
 
-# ── 박스 유틸 (맵 색상 적용) ──────────────────────────────────────────────────
-def _bc() -> str:
-    """현재 맵의 박스/테두리 색상."""
-    return _get_map().col_terrain2
-
-def _top() -> str:
-    c = _bc()
-    return f"{c}╔{'═'*(BOX_W-2)}╗{RESET}"
-
-def _bot() -> str:
-    c = _bc()
-    return f"{c}╚{'═'*(BOX_W-2)}╝{RESET}"
-
-def _div(lc='╠', mc='═', rc='╣') -> str:
-    c = _bc()
-    return f"{c}{lc}{mc*(BOX_W-2)}{rc}{RESET}"
-
-def _row(content: str) -> str:
-    c   = _bc()
-    pad = INNER_W - _wcslen(content)
-    return f"{c}║{RESET}{content}{' '*max(0,pad)}{c}║{RESET}"
-
-def _split_div() -> str:
-    c = _bc()
-    h = INNER_W // 2
-    return f"{c}╠{'═'*h}╦{'═'*(INNER_W-h-1)}╣{RESET}"
-
-def _split_bot() -> str:
-    c = _bc()
-    h = INNER_W // 2
-    return f"{c}╠{'═'*h}╩{'═'*(INNER_W-h-1)}╣{RESET}"
-
-def _split_row(left: str, right: str) -> str:
-    c     = _bc()
-    h     = INNER_W // 2
-    l_pad = h - _wcslen(left)
-    r_pad = INNER_W - h - 1 - _wcslen(right)
-    return (f"{c}║{RESET}{left}{' '*max(0,l_pad)}"
-            f"{c}║{RESET}{right}{' '*max(0,r_pad)}"
-            f"{c}║{RESET}")
-
-
-def _zone_bar(safe: int, max_safe: int = 50, w: int = 40) -> str:
-    cfg    = _get_map()
-    ratio  = max(0, safe / max_safe)
-    filled = int(ratio * w)
-    return f"{cfg.col_zone}{'▰'*filled}{DIM}{'▱'*(w-filled)}{RESET}"
-
-
-def _log_color(msg: str) -> str:
-    if any(k in msg for k in ("💥", "즉사", "HP 0", "승리", "🏆")):
-        return f"{RED}{msg}{RESET}"
-    if any(k in msg for k in ("💊", "회복", "+", "💉")):
-        return f"{GREEN}{msg}{RESET}"
-    if any(k in msg for k in ("🔫", "공격", "탄약")):
-        return f"{YELLOW}{msg}{RESET}"
-    if any(k in msg for k in ("📦", "획득", "개봉", "🔶")):
-        return f"{CYAN}{msg}{RESET}"
-    if any(k in msg for k in ("🌀", "자기장")):
-        return f"{ZONEC}{msg}{RESET}"
-    if "💣" in msg:
-        return f"{ORANGE}{msg}{RESET}"
-    if "🚶" in msg or "이동" in msg:
-        return f"{SAND_D}{msg}{RESET}"
-    return f"{DIM}{WHITE}{msg}{RESET}"
-
-
 # ── 인벤토리 표시 (현재 플레이어 전체 / 상대방 숨김) ─────────────────────────
-def _inv_lines_full(p) -> list[str]:
+def _inv_lines_full(p) -> list:
     """현재 플레이어 전체 인벤토리 (2줄)."""
     from .items import Weapon, Supply, Vehicle
     from .cards import HouseCard, SupplyDropCard
@@ -284,7 +288,7 @@ def _inv_lines_full(p) -> list[str]:
     return [line1, line2]
 
 
-def _inv_hidden() -> list[str]:
+def _inv_hidden() -> list:
     return [
         f" {DIM}🔒 ????{RESET}",
         f" {DIM}🔒 ????{RESET}",
@@ -295,43 +299,46 @@ def _inv_hidden() -> list[str]:
 def render_state(env):
     clear()
     from .environment import INITIAL_DISTANCE
-    cfg    = _get_map()
 
-    dist   = env.distance
-    turn   = env.turn
-    safe   = max(0, 100 - 10 * turn)
-    danger = dist > safe
+    cfg     = _get_map()
+    dist    = env.distance
+    turn    = env.turn
+    safe    = max(0, 100 - 10 * turn)
+    danger  = dist > safe
     cur_pid = env.cur_pid
 
-    map_icon = {"vikendi":"❄","erangel":"🌾","sanhok":"🌿","miramar":"🏜"}.get(cfg.id,"🗺")
-    title  = f" {BOLD}{cfg.col_title}{map_icon}  {cfg.name_ko}  {cfg.name_en}{RESET}  {DIM}Battle Royale{RESET}"
-    tinfo  = f"{cfg.col_terrain2}턴:{RESET}{BOLD}{turn}{RESET}  {cfg.col_terrain2}거리:{RESET}{BOLD}{CYAN}{dist}{RESET}"
+    map_label = f"{cfg.name_ko}  {cfg.name_en}"
+    title  = f" {BOLD}{cfg.col_title}{map_label}{RESET}  {DIM}Battle Royale{RESET}"
+    tinfo  = (f"{cfg.col_terrain2}턴:{RESET}{BOLD}{turn}{RESET}"
+              f"  {cfg.col_terrain2}거리:{RESET}{BOLD}{CYAN}{dist}{RESET}")
     zinfo  = (f"{RED}{BLINK}⚠ 자기장!{RESET}  " if danger else "") + \
              f"{cfg.col_zone}안전:{safe}칸{RESET}"
 
-    print(_top())
-    print(_row(f" {title}  {tinfo}  {zinfo}"))
-    zone_bar   = _zone_bar(safe)
-    print(_row(f" {cfg.col_zone}ZONE{RESET} {zone_bar} {BOLD}{safe:>3}{RESET}m "))
-    print(_div())
+    print(_top(cfg))
+    print(_row(f" {title}  {tinfo}  {zinfo}", cfg))
+    zone_bar = _zone_bar(safe)
+    print(_row(f" {cfg.col_zone}ZONE{RESET} {zone_bar} {BOLD}{safe:>3}{RESET}m ", cfg))
+    print(_div(cfg=cfg))
 
     # 지도
     map_lines = _render_map(env)
     legend    = [
         f"{P1C}◉{RESET}={env.p1.name}  {P2C}◎{RESET}={env.p2.name}",
-        f"{SAND}≈{RESET}모래 {ROCK}▲{RESET}언덕 {BUILD}╔╗{RESET}건물",
+        f"{cfg.col_terrain}{cfg.ch_rough}{RESET}지형 "
+        f"{cfg.col_rock}{cfg.ch_rock}{RESET}언덕 "
+        f"{cfg.col_build}╔╗{RESET}건물",
     ]
     for li, line in enumerate(map_lines):
-        leg = ""
         if li < len(legend):
             leg_str   = f" {legend[li]}"
             available = INNER_W - _wcslen(leg_str)
             if _ansi_len(line) <= available:
                 line = _pad_to(line, available) + leg_str
         pad = INNER_W - _ansi_len(line)
-        print(f"{SAND_D}║{RESET}{line}{' '*max(0,pad)}{SAND_D}║{RESET}")
+        bc  = cfg.col_terrain2
+        print(f"{bc}║{RESET}{line}{' '*max(0,pad)}{bc}║{RESET}")
 
-    print(_div())
+    print(_div(cfg=cfg))
 
     # HUD 두 플레이어
     def p_header(p) -> str:
@@ -349,28 +356,28 @@ def render_state(env):
         color = YELLOW if effs else DIM
         return f" ✨ {color}{effs or '없음'}{RESET}"
 
-    print(_split_div())
-    print(_split_row(p_header(env.p1), p_header(env.p2)))
-    print(_split_row(p_hp(env.p1),    p_hp(env.p2)))
+    print(_split_div(cfg))
+    print(_split_row(p_header(env.p1), p_header(env.p2), cfg))
+    print(_split_row(p_hp(env.p1),    p_hp(env.p2), cfg))
 
     # 인벤토리: 현재 플레이어만 공개
     p1_lines = _inv_lines_full(env.p1) if cur_pid == 0 else _inv_hidden()
     p2_lines = _inv_lines_full(env.p2) if cur_pid == 1 else _inv_hidden()
     for i in range(2):
-        print(_split_row(p1_lines[i], p2_lines[i]))
+        print(_split_row(p1_lines[i], p2_lines[i], cfg))
 
-    print(_split_row(p_eff(env.p1), p_eff(env.p2)))
-    print(_split_bot())
+    print(_split_row(p_eff(env.p1), p_eff(env.p2), cfg))
+    print(_split_bot(cfg))
 
     # Kill feed
-    print(_row(f" {BOLD}[ KILL FEED ]{RESET}"))
+    print(_row(f" {BOLD}[ KILL FEED ]{RESET}", cfg))
     recent = env.log[-4:] if env.log else []
     if not recent:
-        print(_row(f"  {DIM}(없음){RESET}"))
+        print(_row(f"  {DIM}(없음){RESET}", cfg))
     for msg in recent:
         truncated = msg[:INNER_W - 4] + ("…" if len(msg) > INNER_W - 4 else "")
-        print(_row(f"  ▶ {_log_color(truncated)}"))
-    print(_bot())
+        print(_row(f"  ▶ {_log_color(truncated)}", cfg))
+    print(_bot(cfg))
 
 
 # ── 카드 드로우 애니메이션 ─────────────────────────────────────────────────────
@@ -386,7 +393,7 @@ def _card_line(text: str) -> str:
     return f"║{text}{' '*max(0,pad)}║"
 
 
-def _card_back_lines() -> list[str]:
+def _card_back_lines() -> list:
     return [
         f"{SAND_D}╔{'═'*CIW}╗{RESET}",
         f"{SAND_D}║{RESET}{DIM}{'░'*CIW}{RESET}{SAND_D}║{RESET}",
@@ -400,7 +407,7 @@ def _card_back_lines() -> list[str]:
     ]
 
 
-def _card_flip_lines() -> list[str]:
+def _card_flip_lines() -> list:
     """플립 중 (세로 줄)."""
     mid = CW // 2
     lines = []
@@ -410,15 +417,15 @@ def _card_flip_lines() -> list[str]:
     return lines
 
 
-def _item_card_lines(item, is_supply: bool = False) -> list[str]:
+def _item_card_lines(item, is_supply: bool = False) -> list:
     """아이템 카드 앞면."""
     from .items import Weapon, Supply, Vehicle, Ammo
 
     border_c = GOLD if is_supply else CYAN
 
     if isinstance(item, Weapon):
-        cat   = item.category
-        star  = "★" if item.is_special_ammo else ""
+        cat      = item.category
+        star     = "★" if item.is_special_ammo else ""
         ammo_str = f"{item.caliber}{star}" if item.caliber else "근접/투척"
         lines = [
             f"{border_c}╔{'═'*CIW}╗{RESET}",
@@ -469,13 +476,13 @@ def _item_card_lines(item, is_supply: bool = False) -> list[str]:
             f"{border_c}╚{'═'*CIW}╝{RESET}",
         ]
     else:
-        lines = [f"{border_c}╔{'═'*CIW}╗{RESET}"] + \
-                [_card_line("") for _ in range(CH-2)] + \
-                [f"{border_c}╚{'═'*CIW}╝{RESET}"]
+        lines = ([f"{border_c}╔{'═'*CIW}╗{RESET}"] +
+                 [_card_line("") for _ in range(CH-2)] +
+                 [f"{border_c}╚{'═'*CIW}╝{RESET}"])
     return lines
 
 
-def _print_card_frame(cards_list: list[list[str]], header: str, msg: str):
+def _print_card_frame(cards_list: list, header: str, msg: str):
     """카드들을 나란히 출력."""
     clear()
     print()
@@ -504,8 +511,8 @@ def show_card_draw_animation(items: list, is_supply: bool, player_name: str,
     d_flip  = 0.05 if quick else 0.15
     d_front = 0.3 if quick else 0.9
 
-    label   = f"{'★ 보급 드롭 ★' if is_supply else '📦 보급품 발견'}"
-    header  = f"{player_name}  {label}"
+    label  = "★ 보급 드롭 ★" if is_supply else "📦 보급품 발견"
+    header = f"{player_name}  {label}"
 
     backs  = [_card_back_lines() for _ in items]
     fronts = [_item_card_lines(item, is_supply) for item in items]
@@ -535,14 +542,15 @@ def clear():
     os.system("clear" if os.name == "posix" else "cls")
 
 
-def print_log(lines: list[str]):
+def print_log(lines: list):
     for msg in lines:
         print(f"  {_log_color(msg)}")
 
 
-def print_actions(actions: list[dict]):
+def print_actions(actions: list):
+    cfg = _get_map()
     print(f"\n  {BOLD}[ 행동 선택 ]{RESET}  {DIM}(0=패스){RESET}")
-    print(f"  {SAND_D}{'─'*(BOX_W-4)}{RESET}")
+    print(f"  {cfg.col_terrain2}{'─'*(BOX_W-4)}{RESET}")
     for i, act in enumerate(actions):
         usable = act.get("usable", True)
         if usable is False:
@@ -550,23 +558,24 @@ def print_actions(actions: list[dict]):
         else:
             label = f"{WHITE}{act['label']}{RESET}"
         print(f"  [{i+1}] {label}")
-    print(f"  {SAND_D}{'─'*(BOX_W-4)}{RESET}")
+    print(f"  {cfg.col_terrain2}{'─'*(BOX_W-4)}{RESET}")
 
 
 def show_winner(env):
     clear()
-    w = env.winner
-    print(_top())
+    cfg = _get_map()
+    w   = env.winner
+    print(_top(cfg))
     if w:
         c   = P1C if w.pid == 0 else P2C
         msg = f"  {BOLD}{'🏆'*3}  {c}{w.name} 승리!{RESET} {'🏆'*3}"
     else:
         msg = f"  {DIM}무승부{RESET}"
-    print(_row(msg))
-    print(_div())
-    print(_row(f"  {DIM}총 {env.turn}턴 진행{RESET}"))
+    print(_row(msg, cfg))
+    print(_div(cfg=cfg))
+    print(_row(f"  {DIM}총 {env.turn}턴 진행{RESET}", cfg))
     for p in [env.p1, env.p2]:
         c     = P1C if p.pid == 0 else P2C
         alive = f"{GREEN}생존{RESET}" if p.is_alive else f"{RED}사망{RESET}"
-        print(_row(f"  {c}{BOLD}{p.name:12s}{RESET}  HP: {p.hp:>3}  [{alive}]"))
-    print(_bot())
+        print(_row(f"  {c}{BOLD}{p.name:12s}{RESET}  HP: {p.hp:>3}  [{alive}]", cfg))
+    print(_bot(cfg))
